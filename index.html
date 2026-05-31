@@ -43,7 +43,7 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, 'S
 .field.filled { border-color: rgba(63,185,80,0.4); }
 .field.auto { border-color: rgba(35,134,54,0.5); background: rgba(35,134,54,0.08); cursor: default; }
 .field-label { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; line-height: 1.3; }
-.field-val { font-size: 1.05rem; font-weight: 700; color: var(--text); min-height: 24px; word-break: break-word; }
+.field-val { font-size: 0.95rem; font-weight: 700; color: var(--text); min-height: 24px; word-break: break-all; overflow-wrap: anywhere; }
 .field-val.empty { color: var(--border); font-size: 0.85rem; font-weight: 400; }
 .field-val.auto-val { color: var(--green); }
 .field-unit { font-size: 0.6rem; color: var(--muted); margin-top: 2px; }
@@ -472,6 +472,27 @@ hiddenInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') { hiddenInput.blur(); }
 });
 
+// ============ TÜRKÇE SAYI DÖNÜŞTÜRÜCÜ ============
+function turkceToNum(s) {
+  const birler = {'sıfır':0,'bir':1,'iki':2,'üç':3,'dört':4,'beş':5,'altı':6,'yedi':7,'sekiz':8,'dokuz':9};
+  const onlar = {'on':10,'yirmi':20,'otuz':30,'kırk':40,'elli':50,'altmış':60,'yetmiş':70,'seksen':80,'doksan':90};
+  const buyuk = {'yüz':100,'bin':1000,'milyon':1000000};
+  s = s.toLowerCase().trim();
+  // Zaten sayı mı?
+  if (/^-?[\d.,]+$/.test(s)) return null;
+  let tokens = s.split(/\s+/);
+  let total = 0, current = 0, found = false;
+  for (let t of tokens) {
+    if (birler[t] !== undefined) { current += birler[t]; found = true; }
+    else if (onlar[t] !== undefined) { current += onlar[t]; found = true; }
+    else if (t === 'yüz') { current = (current || 1) * 100; found = true; }
+    else if (t === 'bin') { current = (current || 1) * 1000; total += current; current = 0; found = true; }
+    else if (t === 'milyon') { current = (current || 1) * 1000000; total += current; current = 0; found = true; }
+  }
+  total += current;
+  return found ? total : null;
+}
+
 // ============ setValue ============
 function setValue(idx, raw) {
   const f = FIELDS[idx];
@@ -479,6 +500,14 @@ function setValue(idx, raw) {
 
   val = val.replace(/virgül/gi, '.').replace(/nokta/gi, '.');
   val = val.replace(/^eksi\s*/i, '-').replace(/\s+eksi\s*/gi, '-');
+
+  // Türkçe sayı dönüşümü (num alanlar için)
+  if (f.type === 'num') {
+    const isNeg = val.startsWith('-');
+    const checkStr = isNeg ? val.slice(1).trim() : val;
+    const converted = turkceToNum(checkStr);
+    if (converted !== null) val = (isNeg ? '-' : '') + converted;
+  }
 
   if (f.type==='ek') {
     const l = val.toLowerCase();
