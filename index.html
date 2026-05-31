@@ -158,6 +158,739 @@ body { background: var(--bg); color: var(--text); font-family: -apple-system, 'S
       <button class="mic-btn" id="micBtn">🎤</button>
       <div class="hint">
         <b>Basılı tut</b> → konuş → bırak → sonraki alana geçer<br>
+        E/H alanlarında butona dokun • <b>"virgül"</b> → nokta • <b>"eksi"</b> → −
+      </div>
+    </div>
+  </div>
+  <div class="spacer"></div>
+</div>
+
+<!-- LİSTE GÖRÜNÜMÜ -->
+<div id="listView">
+  <div class="list-header">
+    <span id="listCount">0 hasta kaydedildi</span>
+    <span id="listStats"></span>
+  </div>
+  <input class="search-box" id="searchBox" placeholder="🔍 Sıra no veya protokol no ara..." oninput="renderList()">
+  <div id="patientList"></div>
+  <button class="list-dl-btn" onclick="downloadCSV()">⬇ Tüm Verileri CSV İndir</button>
+  <div class="spacer"></div>
+</div>
+
+<!-- DETAY MODAL -->
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
+  <div class="modal" id="modalContent">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="modalTitle"></div>
+    <div class="modal-grid" id="modalGrid"></div>
+    <button class="modal-close" onclick="document.getElementById('modalOverlay').classList.remove('open')">Kapat</button>
+  </div>
+</div>
+
+<script>
+// ============ ALAN TANIMI ============
+const SECTIONS = [
+  {
+    title: 'I. Hasta Demografisi',
+    fields: [
+      { key: 'yas',         label: 'Yaş (yıl)',              unit: 'yıl',          type: 'num' },
+      { key: 'cinsiyet',    label: 'Cinsiyet',                unit: 'E / K',        type: 'ek',  opts: ['E','K'] },
+      { key: 'ekHastalik',  label: 'Ek Hastalıklar',         unit: 'serbest metin',type: 'txt' },
+    ]
+  },
+  {
+    title: 'II. Başvuru Bilgileri & Skorlar',
+    fields: [
+      { key: 'kabulTarihi', label: 'YBÜ Kabul Tarihi',       unit: 'GG.AA.YYYY',   type: 'txt' },
+      { key: 'cikisTarihi', label: 'YBÜ Çıkış Tarihi',       unit: 'GG.AA.YYYY',   type: 'txt' },
+      { key: 'kabulTani',   label: 'Kabul Tanısı',           unit: 'serbest metin',type: 'txt' },
+      { key: 'gks0',        label: 'GKS (0.saat)',            unit: '3–15',         type: 'num' },
+      { key: 'sofa0',       label: 'SOFA (0.saat)',           unit: 'puan',         type: 'num' },
+    ]
+  },
+  {
+    title: 'III. Vital Bulgular (0. Saat)',
+    fields: [
+      { key: 'skb0',        label: 'SKB 0h',                 unit: 'mmHg',         type: 'num' },
+      { key: 'dkb0',        label: 'DKB 0h',                 unit: 'mmHg',         type: 'num' },
+      { key: 'nabiz0',      label: 'Nabız 0h',               unit: '/dk',          type: 'num' },
+      { key: 'spo20',       label: 'SpO2 0h',                unit: '%',            type: 'num' },
+      { key: 'map0',        label: 'MAP 0h (OTO)',            unit: 'mmHg – otomatik', type: 'auto', formula: () => {
+          const s=vn('skb0'), d=vn('dkb0'); return (s&&d) ? ((s+2*d)/3).toFixed(1) : null;
+      }},
+    ]
+  },
+  {
+    title: 'IV. Venöz Kan Gazı (0. Saat)',
+    fields: [
+      { key: 'ph0',         label: 'pH 0h',                  unit: '',             type: 'num' },
+      { key: 'pco20',       label: 'pCO2 0h',                unit: 'mmHg',         type: 'num' },
+      { key: 'po20',        label: 'pO2 0h',                 unit: 'mmHg',         type: 'num' },
+      { key: 'hco30',       label: 'HCO3 0h',                unit: 'mmol/L',       type: 'num' },
+      { key: 'be0',         label: 'BE 0h',                  unit: 'mmol/L',       type: 'num' },
+      { key: 'laktat0',     label: 'Laktat 0h',              unit: 'mmol/L',       type: 'num' },
+    ]
+  },
+  {
+    title: 'V. Biyokimya (0. Saat)',
+    fields: [
+      { key: 'alb0',        label: 'Albümin 0h',             unit: 'g/dL',         type: 'num' },
+      { key: 'kre0',        label: 'Kreatinin 0h',           unit: 'mg/dL',        type: 'num' },
+      { key: 'crp0',        label: 'CRP 0h',                 unit: 'mg/L',         type: 'num' },
+      { key: 'ast0',        label: 'AST 0h',                 unit: 'U/L',          type: 'num' },
+      { key: 'alt0',        label: 'ALT 0h',                 unit: 'U/L',          type: 'num' },
+    ]
+  },
+  {
+    title: 'VI. Hemogram (0. Saat)',
+    fields: [
+      { key: 'hb0',         label: 'Hb 0h',                  unit: 'g/dL',         type: 'num' },
+      { key: 'wbc0',        label: 'WBC 0h',                 unit: 'x10³/μL',      type: 'num' },
+      { key: 'plt0',        label: 'Platelet 0h',            unit: 'x10³/μL',      type: 'num' },
+    ]
+  },
+  {
+    title: 'VII. Prokalsitonin (0. Saat)',
+    fields: [
+      { key: 'pct0',        label: 'Prokalsitonin 0h',       unit: 'ng/mL',        type: 'num' },
+    ]
+  },
+  {
+    title: 'VIII. Biyokimya (48. Saat)',
+    fields: [
+      { key: 'alb48',       label: 'Albümin 48h',            unit: 'g/dL',         type: 'num' },
+      { key: 'kre48',       label: 'Kreatinin 48h',          unit: 'mg/dL',        type: 'num' },
+      { key: 'crp48',       label: 'CRP 48h',                unit: 'mg/L',         type: 'num' },
+      { key: 'ast48',       label: 'AST 48h',                unit: 'U/L',          type: 'num' },
+      { key: 'alt48',       label: 'ALT 48h',                unit: 'U/L',          type: 'num' },
+    ]
+  },
+  {
+    title: 'IX. Hemogram (48. Saat)',
+    fields: [
+      { key: 'hb48',        label: 'Hb 48h',                 unit: 'g/dL',         type: 'num' },
+      { key: 'wbc48',       label: 'WBC 48h',                unit: 'x10³/μL',      type: 'num' },
+      { key: 'plt48',       label: 'Platelet 48h',           unit: 'x10³/μL',      type: 'num' },
+    ]
+  },
+  {
+    title: 'X. Prokalsitonin (48. Saat)',
+    fields: [
+      { key: 'pct48',       label: 'Prokalsitonin 48h',      unit: 'ng/mL',        type: 'num' },
+    ]
+  },
+  {
+    title: 'XI. sACR Hesaplama (Otomatik)',
+    fields: [
+      { key: 'sacr0',       label: 'sACR_0',                 unit: 'Alb/Krea – otomatik', type: 'auto', formula: () => {
+          const a=vn('alb0'), k=vn('kre0'); return (a&&k&&k!==0) ? (a/k).toFixed(4) : null;
+      }},
+      { key: 'sacr48',      label: 'sACR_48',                unit: 'Alb/Krea – otomatik', type: 'auto', formula: () => {
+          const a=vn('alb48'), k=vn('kre48'); return (a&&k&&k!==0) ? (a/k).toFixed(4) : null;
+      }},
+      { key: 'dsacr',       label: 'ΔsACR (48h−0h)',         unit: 'otomatik',     type: 'auto', formula: () => {
+          const s0=parseFloat(cur.sacr0), s48=parseFloat(cur.sacr48);
+          return (!isNaN(s0)&&!isNaN(s48)) ? (s48-s0).toFixed(4) : null;
+      }},
+      { key: 'pdsacr',      label: 'Δ%sACR (%Değişim)',      unit: 'otomatik',     type: 'auto', formula: () => {
+          const s0=parseFloat(cur.sacr0), s48=parseFloat(cur.sacr48);
+          return (!isNaN(s0)&&s0!==0&&!isNaN(s48)) ? (((s48-s0)/s0)*100).toFixed(2) : null;
+      }},
+    ]
+  },
+  {
+    title: 'XII. Tedavi & Müdahale',
+    fields: [
+      { key: 'mvGiris',     label: 'MV Giriş',               unit: 'E / H',        type: 'ek', opts: ['E','H'] },
+      { key: 'mvYatis',     label: 'MV Yatış',               unit: 'E / H',        type: 'ek', opts: ['E','H'] },
+      { key: 'vasoGiris',   label: 'Vazopressör Giriş',      unit: 'E / H',        type: 'ek', opts: ['E','H'] },
+      { key: 'vasoYatis',   label: 'Vazopressör Yatış',      unit: 'E / H',        type: 'ek', opts: ['E','H'] },
+      { key: 'hd',          label: 'Hemodiyaliz',            unit: 'E / H',        type: 'ek', opts: ['E','H'] },
+      { key: 'albInf',      label: 'Albümin İnf. İlk 2 Gün',unit: 'E / H',        type: 'ek', opts: ['E','H'] },
+      { key: 'crrt',        label: 'CRRT İlk 2 Gün',         unit: 'E / H',        type: 'ek', opts: ['E','H'] },
+    ]
+  },
+  {
+    title: 'XIII. Sonuçlar',
+    fields: [
+      { key: 'losGun',      label: 'YBÜ Kalış Süresi',       unit: 'gün',          type: 'num' },
+      { key: 'mortalite',   label: 'YBÜ Mortalite',          unit: 'E / H',        type: 'ek', opts: ['E','H'] },
+      { key: 'mortTarih',   label: 'Mortalite Tarihi',        unit: 'GG.AA.YYYY',   type: 'txt' },
+      { key: 'taburcuYer',  label: 'Taburculuk / Sevk Yeri', unit: 'serbest',      type: 'txt' },
+      { key: 'notlar',      label: 'Notlar',                  unit: 'serbest',      type: 'txt' },
+    ]
+  }
+];
+
+const CSV_KEYS = [
+  'siraNo','protokolNo','yas','cinsiyet','ekHastalik',
+  'kabulTarihi','cikisTarihi','kabulTani','gks0','sofa0',
+  'skb0','dkb0','nabiz0','spo20','map0',
+  'ph0','pco20','po20','hco30','be0','laktat0',
+  'alb0','kre0','hb0','wbc0','plt0','crp0','pct0','ast0','alt0',
+  'alb48','kre48','hb48','wbc48','plt48','crp48','pct48','ast48','alt48',
+  'sacr0','sacr48','dsacr','pdsacr',
+  'mvGiris','mvYatis','vasoGiris','vasoYatis','hd','albInf','crrt',
+  'losGun','mortalite','mortTarih','taburcuYer','notlar'
+];
+
+const CSV_HEADERS = [
+  'Sıra No','Protokol No','Yaş (yıl)','Cinsiyet (E/K)','Ek Hastalıklar',
+  'YBÜ Kabul Tarihi','YBÜ Çıkış Tarihi','Kabul Tanısı','GKS (0.saat)','SOFA (0.saat)',
+  'SKB 0h (mmHg)','DKB 0h (mmHg)','Nabız 0h (/dk)','SpO2 0h (%)','MAP 0h (mmHg)',
+  'pH 0h','pCO2 0h (mmHg)','pO2 0h (mmHg)','HCO3 0h (mmol/L)','BE 0h (mmol/L)','Laktat 0h (mmol/L)',
+  'Albümin 0h (g/dL)','Kreatinin 0h (mg/dL)','Hb 0h (g/dL)','WBC 0h (x10³/μL)','Platelet 0h (x10³/μL)',
+  'CRP 0h (mg/L)','Prokalsitonin 0h (ng/mL)','AST 0h (U/L)','ALT 0h (U/L)',
+  'Albümin 48h (g/dL)','Kreatinin 48h (mg/dL)','Hb 48h (g/dL)','WBC 48h (x10³/μL)','Platelet 48h (x10³/μL)',
+  'CRP 48h (mg/L)','Prokalsitonin 48h (ng/mL)','AST 48h (U/L)','ALT 48h (U/L)',
+  'sACR_0','sACR_48','ΔsACR','Δ%sACR',
+  'MV Giriş (E/H)','MV Yatış (E/H)','Vazopressör Giriş (E/H)','Vazopressör Yatış (E/H)',
+  'Hemodiyaliz (E/H)','Albümin İnf. İlk 2 Gün (E/H)','CRRT İlk 2 Gün (E/H)',
+  'YBÜ Kalış Süresi (gün)','YBÜ Mortalite (E/H)','Mortalite Tarihi','Taburculuk/Sevk Yeri','Notlar'
+];
+
+const FIELDS = SECTIONS.flatMap(s => s.fields);
+let cur = {};
+let allData = [];
+let activeIdx = 0;
+let recog = null;
+let isListening = false;
+
+const STORAGE_KEY = 'sacr_allData';
+
+function saveToStorage() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(allData)); } catch(e) {}
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) allData = JSON.parse(raw);
+  } catch(e) { allData = []; }
+}
+
+function vn(key) { const n = parseFloat(cur[key]); return isNaN(n) ? null : n; }
+
+// ============ TAB ============
+function showTab(tab) {
+  const isForm = tab === 'form';
+  document.getElementById('formView').style.display = isForm ? 'block' : 'none';
+  document.getElementById('listView').style.display = isForm ? 'none' : 'block';
+  document.getElementById('formHeader').style.display = isForm ? 'block' : 'none';
+  document.getElementById('tabForm').classList.toggle('active', isForm);
+  document.getElementById('tabList').classList.toggle('active', !isForm);
+  if (!isForm) renderList();
+}
+
+// ============ UI (FORM) ============
+function buildUI() {
+  const body = document.getElementById('formBody');
+  body.innerHTML = '';
+  let gi = 0;
+  SECTIONS.forEach(sec => {
+    const wrap = document.createElement('div');
+    wrap.className = 'section';
+    wrap.innerHTML = `<div class="section-title">${sec.title}</div>`;
+    const grid = document.createElement('div');
+    grid.className = 'fields' + (sec.fields.length === 1 ? ' single' : '');
+    sec.fields.forEach(f => {
+      const idx = gi++;
+      const card = document.createElement('div');
+      card.className = 'field' + (f.type==='auto' ? ' auto' : '') + (idx===0 ? ' active' : '');
+      card.id = 'fc_' + idx;
+      if (f.type !== 'auto') card.onclick = () => setActive(idx);
+      card.innerHTML = `
+        <div class="dot"></div>
+        <div class="field-label">${f.label}</div>
+        <div class="field-val empty" id="fv_${idx}">—</div>
+        <div class="field-unit">${f.unit}</div>
+      `;
+      if (f.opts) {
+        const row = document.createElement('div');
+        row.className = 'opt-row';
+        f.opts.forEach(o => {
+          const b = document.createElement('button');
+          b.className = 'opt-btn';
+          b.textContent = o;
+          b.onclick = e => { e.stopPropagation(); setActive(idx); setValue(idx, o); };
+          row.appendChild(b);
+        });
+        card.appendChild(row);
+      }
+      grid.appendChild(card);
+    });
+    wrap.appendChild(grid);
+    body.appendChild(wrap);
+  });
+}
+
+function setActive(idx) {
+  document.querySelectorAll('.field').forEach((c,i) => c.classList.toggle('active', i===idx));
+  activeIdx = idx;
+  document.getElementById('fc_'+idx).scrollIntoView({behavior:'smooth', block:'center'});
+}
+
+function setValue(idx, raw) {
+  const f = FIELDS[idx];
+  let val = raw.toString().trim();
+
+  // "virgül" ve "nokta" → ondalık nokta
+  val = val.replace(/virgül/gi, '.').replace(/nokta/gi, '.');
+
+  // *** DÜZELTME: "eksi" → eksi işareti (-) ***
+  // "eksi beş" → "-beş", "eksi 5" → "-5", "eksi" başta veya ortada
+  val = val.replace(/^eksi\s*/i, '-').replace(/\s+eksi\s*/gi, '-');
+
+  if (f.type==='ek') {
+    const l = val.toLowerCase();
+    if (l.includes('evet')||l==='e') val='E';
+    else if (l.includes('hayır')||l.includes('hayir')||l==='h') val='H';
+    else if (l.includes('erkek')) val='E';
+    else if (l.includes('kadın')||l.includes('kadin')) val='K';
+  }
+
+  // *** DÜZELTME: regex'e eksi işareti eklendi (-?[\d.]+) ***
+  if (f.type==='num') { const m=val.match(/-?[\d.]+/); val=m?m[0]:val; }
+
+  cur[f.key] = val;
+  const el = document.getElementById('fv_'+idx);
+  el.textContent = val; el.className = 'field-val';
+  document.getElementById('fc_'+idx).classList.add('filled');
+  document.getElementById('transcript').textContent = '✓  ' + val;
+  updateAutos();
+  setTimeout(() => {
+    let n = idx+1;
+    while (n<FIELDS.length && FIELDS[n].type==='auto') n++;
+    if (n<FIELDS.length) setActive(n);
+  }, 350);
+}
+
+function updateAutos() {
+  FIELDS.forEach((f,i) => {
+    if (f.type!=='auto') return;
+    const result = f.formula();
+    const el = document.getElementById('fv_'+i);
+    if (result!==null) { cur[f.key]=result; el.textContent=result; el.className='field-val auto-val'; }
+    else { delete cur[f.key]; el.textContent='—'; el.className='field-val empty'; }
+  });
+}
+
+// ============ MİKROFON ============
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (!SR) {
+  document.getElementById('transcript').textContent = '⚠️ Bu tarayıcı ses tanımayı desteklemiyor. Chrome kullanın.';
+}
+
+function createRecog() {
+  if (!SR) return null;
+  const r = new SR();
+  r.lang = 'tr-TR';
+  r.continuous = false;
+  r.interimResults = true;
+  r.maxAlternatives = 1;
+
+  r.onstart = () => {
+    isListening = true;
+    document.getElementById('micBtn').classList.add('on');
+    document.getElementById('micBtn').textContent = '⏹';
+    const tr = document.getElementById('transcript');
+    tr.textContent = '🔴 Dinleniyor...';
+    tr.classList.add('live');
+  };
+
+  r.onresult = e => {
+    let interim = '', finalText = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += t;
+      else interim += t;
+    }
+    const tr = document.getElementById('transcript');
+    if (interim) { tr.textContent = '🔴 ' + interim; tr.classList.add('live'); }
+    if (finalText.trim()) {
+      tr.classList.remove('live');
+      setValue(activeIdx, finalText.trim());
+    }
+  };
+
+  r.onerror = e => {
+    const tr = document.getElementById('transcript');
+    if (e.error === 'not-allowed') tr.textContent = '⛔ Mikrofon izni verilmedi.';
+    else if (e.error === 'no-speech') tr.textContent = 'Ses algılanamadı, tekrar deneyin.';
+    else tr.textContent = 'Hata: ' + e.error;
+    resetMicUI();
+  };
+
+  r.onend = () => { resetMicUI(); };
+  return r;
+}
+
+function resetMicUI() {
+  isListening = false;
+  recog = null;
+  const btn = document.getElementById('micBtn');
+  btn.classList.remove('on');
+  btn.textContent = '🎤';
+  document.getElementById('transcript').classList.remove('live');
+}
+
+function startListen() {
+  if (isListening) return;
+  recog = createRecog();
+  if (!recog) return;
+  try { recog.start(); } catch(e) { resetMicUI(); }
+}
+
+function stopListen() {
+  if (!recog) return;
+  try { recog.stop(); } catch(e) {}
+}
+
+const micBtn = document.getElementById('micBtn');
+micBtn.addEventListener('mousedown', e => { e.preventDefault(); startListen(); });
+micBtn.addEventListener('mouseup', e => { e.preventDefault(); stopListen(); });
+micBtn.addEventListener('mouseleave', e => { if (isListening) stopListen(); });
+micBtn.addEventListener('touchstart', e => { e.preventDefault(); startListen(); }, { passive: false });
+micBtn.addEventListener('touchend', e => { e.preventDefault(); stopListen(); }, { passive: false });
+micBtn.addEventListener('touchcancel', e => { e.preventDefault(); stopListen(); }, { passive: false });
+
+document.addEventListener('keydown', e => {
+  if (e.target.tagName==='INPUT') return;
+  if (e.code==='Space'){e.preventDefault();startListen();}
+  if (e.code==='Tab'){e.preventDefault();let n=activeIdx+1;while(n<FIELDS.length&&FIELDS[n].type==='auto')n++;if(n<FIELDS.length)setActive(n);}
+  if (e.code==='Enter') savePatient();
+  if (e.code==='Backspace') clearField();
+});
+document.addEventListener('keyup', e=>{if(e.code==='Space')stopListen();});
+
+// ============ HASTA (FORM) ============
+function clearField() {
+  const f = FIELDS[activeIdx];
+  if (f.type==='auto') return;
+  delete cur[f.key];
+  const el = document.getElementById('fv_'+activeIdx);
+  el.textContent='—'; el.className='field-val empty';
+  document.getElementById('fc_'+activeIdx).classList.remove('filled');
+  updateAutos();
+}
+
+function newPatient() {
+  if (Object.keys(cur).length>0 && !confirm('Kaydedilmemiş veri var. Temizlensin mi?')) return;
+  cur={};
+  document.querySelectorAll('.field-val').forEach(el=>{el.textContent='—';el.className='field-val empty';});
+  document.querySelectorAll('.field').forEach(el=>el.classList.remove('filled'));
+  document.getElementById('fProtokolNo').value='';
+  document.getElementById('transcript').textContent='Mikrofona basılı tut → değeri söyle → bırak';
+  setActive(0);
+}
+
+function savePatient() {
+  const sira = document.getElementById('fSiraNo').value || (allData.length+1);
+  const proto = document.getElementById('fProtokolNo').value || '';
+  allData.push({siraNo:sira, protokolNo:proto, ...cur});
+  const n = allData.length;
+  document.getElementById('ctr').textContent = n+' / 370 hasta';
+  document.getElementById('prog').style.width = (n/370*100)+'%';
+  document.getElementById('fSiraNo').value = parseInt(sira)+1;
+  document.getElementById('transcript').textContent = '✅ Hasta '+sira+' kaydedildi!';
+  saveToStorage();
+  newPatient();
+}
+
+// ============ LİSTE GÖRÜNÜMÜ ============
+function renderList() {
+  const q = (document.getElementById('searchBox').value || '').toLowerCase().trim();
+  const filtered = allData.filter(d => {
+    if (!q) return true;
+    return String(d.siraNo).includes(q) || String(d.protokolNo||'').toLowerCase().includes(q) || String(d.kabulTani||'').toLowerCase().includes(q);
+  });
+
+  const deadCount = allData.filter(d => d.mortalite === 'E').length;
+  document.getElementById('listCount').textContent = allData.length + ' hasta kaydedildi';
+  document.getElementById('listStats').textContent = allData.length > 0 ? `Mortalite: ${deadCount}/${allData.length}` : '';
+
+  const container = document.getElementById('patientList');
+  if (allData.length === 0) {
+    container.innerHTML = `<div class="empty-state"><div class="big">📋</div><p>Henüz hasta kaydedilmedi.<br>Veri Girişi sekmesinden başlayın.</p></div>`;
+    return;
+  }
+  if (filtered.length === 0) {
+    container.innerHTML = `<div class="empty-state"><div class="big">🔍</div><p>Arama sonucu bulunamadı.</p></div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+  filtered.forEach((d, fi) => {
+    const realIdx = allData.indexOf(d);
+    const card = document.createElement('div');
+    card.className = 'pt-card';
+
+    const mort = d.mortalite === 'E' ? 'dead' : d.mortalite === 'H' ? 'alive' : 'unknown';
+    const mortLabel = d.mortalite === 'E' ? '✕ Exitus' : d.mortalite === 'H' ? '✓ Taburcu/Hayatta' : '? Bilinmiyor';
+
+    let sacrLine = '';
+    if (d.sacr0) sacrLine += `sACR₀: <b>${d.sacr0}</b>`;
+    if (d.sacr48) sacrLine += `  sACR₄₈: <b>${d.sacr48}</b>`;
+    if (d.pdsacr) sacrLine += `  Δ%: <b>${d.pdsacr}%</b>`;
+
+    card.innerHTML = `
+      <div class="pt-card-top">
+        <div class="pt-name">Hasta #${d.siraNo}${d.protokolNo ? ' · ' + d.protokolNo : ''}</div>
+        <span class="pt-badge ${mort}">${mortLabel}</span>
+      </div>
+      <div class="pt-row">
+        ${d.yas ? `<span class="pt-chip"><b>${d.yas}</b> yaş</span>` : ''}
+        ${d.cinsiyet ? `<span class="pt-chip"><b>${d.cinsiyet}</b></span>` : ''}
+        ${d.kabulTani ? `<span class="pt-chip">${d.kabulTani.substring(0,24)}${d.kabulTani.length>24?'…':''}</span>` : ''}
+        ${d.sofa0 ? `<span class="pt-chip">SOFA <b>${d.sofa0}</b></span>` : ''}
+        ${d.gks0 ? `<span class="pt-chip">GKS <b>${d.gks0}</b></span>` : ''}
+        ${d.losGun ? `<span class="pt-chip">YBÜ <b>${d.losGun}</b> gün</span>` : ''}
+      </div>
+      ${sacrLine ? `<div class="pt-sacr">${sacrLine}</div>` : ''}
+      <div class="pt-actions">
+        <button class="pt-act-btn edit" onclick="showDetail(${realIdx})">🔍 Detay</button>
+        <button class="pt-act-btn edit" onclick="editPatient(${realIdx})">✏️ Düzenle</button>
+        <button class="pt-act-btn del" onclick="deletePatient(${realIdx})">🗑 Sil</button>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+function showDetail(idx) {
+  const d = allData[idx];
+  document.getElementById('modalTitle').textContent = `Hasta #${d.siraNo}${d.protokolNo ? ' · ' + d.protokolNo : ''}`;
+  const grid = document.getElementById('modalGrid');
+  grid.innerHTML = '';
+
+  const groups = [
+    { label: 'Yaş / Cinsiyet', val: [d.yas ? d.yas + ' yaş' : null, d.cinsiyet].filter(Boolean).join(' · ') },
+    { label: 'Kabul Tanısı', val: d.kabulTani, full: true },
+    { label: 'Kabul / Çıkış', val: [d.kabulTarihi, d.cikisTarihi].filter(Boolean).join(' → ') },
+    { label: 'GKS / SOFA', val: [d.gks0 ? 'GKS '+d.gks0 : null, d.sofa0 ? 'SOFA '+d.sofa0 : null].filter(Boolean).join(' · ') },
+    { label: 'MAP 0h', val: d.map0 ? d.map0 + ' mmHg' : null },
+    { label: 'Laktat 0h', val: d.laktat0 ? d.laktat0 + ' mmol/L' : null },
+    { label: 'Alb 0h / 48h', val: [d.alb0 ? d.alb0+'g/dL' : null, d.alb48 ? d.alb48+'g/dL' : null].filter(Boolean).join(' → ') },
+    { label: 'Krea 0h / 48h', val: [d.kre0 ? d.kre0+'mg/dL' : null, d.kre48 ? d.kre48+'mg/dL' : null].filter(Boolean).join(' → ') },
+    { label: 'CRP 0h / 48h', val: [d.crp0 ? d.crp0+'mg/L' : null, d.crp48 ? d.crp48+'mg/L' : null].filter(Boolean).join(' → ') },
+    { label: 'sACR₀', val: d.sacr0, auto: true },
+    { label: 'sACR₄₈', val: d.sacr48, auto: true },
+    { label: 'ΔsACR', val: d.dsacr, auto: true },
+    { label: 'Δ%sACR', val: d.pdsacr ? d.pdsacr + '%' : null, auto: true },
+    { label: 'MV', val: d.mvGiris ? 'Giriş:'+d.mvGiris+' Yatış:'+(d.mvYatis||'?') : null },
+    { label: 'Vazopressör', val: d.vasoGiris ? 'Giriş:'+d.vasoGiris+' Yatış:'+(d.vasoYatis||'?') : null },
+    { label: 'Hemodiyaliz', val: d.hd },
+    { label: 'Alb İnf / CRRT', val: [d.albInf ? 'AlbInf:'+d.albInf : null, d.crrt ? 'CRRT:'+d.crrt : null].filter(Boolean).join(' · ') },
+    { label: 'YBÜ Kalış', val: d.losGun ? d.losGun + ' gün' : null },
+    { label: 'Mortalite', val: d.mortalite === 'E' ? '✕ Exitus (' + (d.mortTarih||'?') + ')' : d.mortalite === 'H' ? '✓ Hayatta' : null },
+    { label: 'Taburculuk', val: d.taburcuYer, full: true },
+    { label: 'Notlar', val: d.notlar, full: true },
+  ];
+
+  groups.forEach(g => {
+    if (!g.val) return;
+    const item = document.createElement('div');
+    item.className = 'modal-item' + (g.full ? ' full' : '');
+    item.innerHTML = `<div class="modal-label">${g.label}</div><div class="modal-val${g.auto?' auto':''}">${g.val}</div>`;
+    grid.appendChild(item);
+  });
+
+  document.getElementById('modalOverlay').classList.add('open');
+}
+
+function closeModal(e) {
+  if (e.target === document.getElementById('modalOverlay'))
+    document.getElementById('modalOverlay').classList.remove('open');
+}
+
+function editPatient(idx) {
+  const d = allData[idx];
+  cur = { ...d };
+  FIELDS.forEach((f, i) => {
+    if (f.type === 'auto') return;
+    const el = document.getElementById('fv_'+i);
+    if (d[f.key] !== undefined) {
+      el.textContent = d[f.key];
+      el.className = 'field-val';
+      document.getElementById('fc_'+i).classList.add('filled');
+    }
+  });
+  updateAutos();
+  document.getElementById('fSiraNo').value = d.siraNo;
+  document.getElementById('fProtokolNo').value = d.protokolNo || '';
+  allData.splice(idx, 1);
+  const n = allData.length;
+  document.getElementById('ctr').textContent = n + ' / 370 hasta';
+  document.getElementById('prog').style.width = (n/370*100) + '%';
+  showTab('form');
+  document.getElementById('transcript').textContent = '✏️ Düzenleme modu — Kaydet ile güncelle';
+}
+
+function deletePatient(idx) {
+  const d = allData[idx];
+  if (!confirm(`Hasta #${d.siraNo} silinsin mi?`)) return;
+  allData.splice(idx, 1);
+  saveToStorage();
+  const n = allData.length;
+  document.getElementById('ctr').textContent = n + ' / 370 hasta';
+  document.getElementById('prog').style.width = (n/370*100) + '%';
+  renderList();
+}
+
+function downloadCSV() {
+  if (allData.length===0){alert('Henüz veri girilmedi.');return;}
+  const rows = allData.map(d => CSV_KEYS.map(k => d[k]!==undefined?d[k]:''));
+  const csv = [CSV_HEADERS,...rows].map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(';')).join('\r\n');
+  const blob = new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='sacr_veri_'+new Date().toISOString().slice(0,10)+'.csv';
+  a.click();
+}
+
+buildUI();
+loadFromStorage();
+const _n = allData.length;
+document.getElementById('ctr').textContent = _n + ' / 370 hasta';
+document.getElementById('prog').style.width = (_n/370*100) + '%';
+if (_n > 0) document.getElementById('fSiraNo').value = parseInt(allData[allData.length-1].siraNo) + 1;
+else document.getElementById('fSiraNo').value = 1;
+showTab('form');
+</script>
+
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ===== FORM GÖRÜNÜMÜ ===== */
+.section { margin: 12px 10px 0; }
+.section-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 6px; border-left: 3px solid var(--accent); padding-left: 8px; }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.fields.single { grid-template-columns: 1fr; }
+.field { background: var(--card); border: 1.5px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; position: relative; min-height: 64px; }
+.field.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,0.15); }
+.field.filled { border-color: rgba(63,185,80,0.4); }
+.field.auto { border-color: rgba(35,134,54,0.5); background: rgba(35,134,54,0.08); cursor: default; }
+.field-label { font-size: 0.6rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; line-height: 1.3; }
+.field-val { font-size: 1.05rem; font-weight: 700; color: var(--text); min-height: 24px; }
+.field-val.empty { color: var(--border); font-size: 0.85rem; font-weight: 400; }
+.field-val.auto-val { color: var(--green); }
+.field-unit { font-size: 0.6rem; color: var(--muted); margin-top: 2px; }
+.dot { position: absolute; top: 8px; right: 8px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: blink 1s infinite; display: none; }
+.field.active .dot { display: block; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+.opt-row { display: flex; gap: 5px; margin-top: 6px; }
+.opt-btn { flex: 1; padding: 4px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.8rem; font-weight: 700; cursor: pointer; }
+
+/* ===== MİKROFON ===== */
+.mic-area { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 12px 14px; z-index: 100; }
+.transcript { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 0.85rem; color: var(--orange); min-height: 34px; margin-bottom: 10px; transition: border-color 0.2s; }
+.transcript.live { border-color: var(--red); color: var(--red); }
+.mic-row { display: flex; align-items: center; gap: 10px; }
+.mic-btn { width: 64px; height: 64px; border-radius: 50%; border: 2.5px solid var(--accent); background: var(--surface); color: var(--accent); font-size: 1.6rem; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s; user-select: none; -webkit-user-select: none; }
+.mic-btn.on { background: var(--red); border-color: var(--red); color: #fff; animation: pulse 0.8s infinite; }
+@keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(248,81,73,0.4)} 50%{box-shadow:0 0 0 12px rgba(248,81,73,0)} }
+.hint { font-size: 0.7rem; color: var(--muted); line-height: 1.6; }
+.hint b { color: var(--accent); }
+
+.btn-row { display: flex; gap: 7px; margin: 10px 10px 4px; }
+.btn { flex: 1; padding: 10px 6px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 0.78rem; font-weight: 600; cursor: pointer; }
+.btn.save { background: var(--green); border-color: var(--green); color: #000; }
+.btn.dl { border-color: var(--accent); color: var(--accent); }
+.btn.clr { color: var(--red); border-color: rgba(248,81,73,0.3); }
+.spacer { height: 20px; }
+
+/* ===== LISTE GÖRÜNÜMÜ ===== */
+#listView { padding: 10px; display: none; }
+.list-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.list-header span { font-size: 0.75rem; color: var(--muted); }
+.search-box { width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.85rem; padding: 8px 12px; margin-bottom: 10px; }
+.search-box::placeholder { color: var(--muted); }
+.pt-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.15s; }
+.pt-card:active { border-color: var(--accent); }
+.pt-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+.pt-name { font-size: 0.9rem; font-weight: 700; color: var(--text); }
+.pt-badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 0.65rem; font-weight: 700; }
+.pt-badge.alive { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+.pt-badge.dead { background: rgba(248,81,73,0.12); color: var(--red); border: 1px solid rgba(248,81,73,0.25); }
+.pt-badge.unknown { background: rgba(139,148,158,0.15); color: var(--muted); border: 1px solid var(--border); }
+.pt-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.pt-chip { font-size: 0.65rem; color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
+.pt-chip b { color: var(--text); }
+.pt-sacr { font-size: 0.7rem; margin-top: 6px; color: var(--accent); font-weight: 600; }
+.pt-actions { display: flex; gap: 6px; margin-top: 10px; }
+.pt-act-btn { flex: 1; padding: 7px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.75rem; font-weight: 600; cursor: pointer; text-align: center; }
+.pt-act-btn.edit { border-color: var(--accent); color: var(--accent); }
+.pt-act-btn.del { border-color: rgba(248,81,73,0.3); color: var(--red); }
+.empty-state { text-align: center; padding: 40px 20px; color: var(--muted); }
+.empty-state .big { font-size: 2.5rem; margin-bottom: 8px; }
+.empty-state p { font-size: 0.85rem; }
+.list-dl-btn { width: 100%; padding: 11px; border-radius: 8px; border: 1px solid var(--accent); background: none; color: var(--accent); font-size: 0.85rem; font-weight: 700; cursor: pointer; margin-top: 6px; }
+
+/* ===== HASTA DETAY MODAL ===== */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; display: none; align-items: flex-end; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--surface); border-radius: 16px 16px 0 0; width: 100%; max-height: 80vh; overflow-y: auto; padding: 16px; }
+.modal-handle { width: 40px; height: 4px; background: var(--border); border-radius: 2px; margin: 0 auto 14px; }
+.modal-title { font-size: 1rem; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
+.modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.modal-item { background: var(--card); border-radius: 8px; padding: 8px 10px; }
+.modal-item.full { grid-column: 1/-1; }
+.modal-label { font-size: 0.58rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.modal-val { font-size: 0.88rem; font-weight: 600; color: var(--text); }
+.modal-val.auto { color: var(--green); }
+.modal-close { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-size: 0.85rem; font-weight: 600; cursor: pointer; margin-top: 12px; }
+</style>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0d1117">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="sACR">
+</head>
+<body>
+
+<!-- HEADER (form modunda görünür) -->
+<div class="header" id="formHeader">
+  <div class="header-top">
+    <h1>🎙 sACR Veri Girişi</h1>
+    <span class="counter" id="ctr">0 / 370 hasta</span>
+  </div>
+  <div class="header-ids">
+    <input id="fSiraNo" placeholder="Sıra No" type="number">
+    <input id="fProtokolNo" placeholder="Protokol No">
+  </div>
+  <div class="progress-bar"><div class="progress-fill" id="prog" style="width:0%"></div></div>
+</div>
+
+<!-- TAB NAV -->
+<div class="tab-nav">
+  <button class="tab-btn" id="tabList" onclick="showTab('list')">📋 Hasta Listesi</button>
+  <button class="tab-btn active" id="tabForm" onclick="showTab('form')">🎙 Veri Girişi</button>
+</div>
+
+<!-- FORM GÖRÜNÜMÜ -->
+<div id="formView">
+  <div id="formBody"></div>
+  <div class="btn-row">
+    <button class="btn clr" onclick="clearField()">✕ Sil</button>
+    <button class="btn" onclick="newPatient()">↺ Yeni</button>
+    <button class="btn save" onclick="savePatient()">✓ Kaydet</button>
+    <button class="btn dl" onclick="downloadCSV()">⬇ CSV</button>
+  </div>
+  <div class="mic-area">
+    <div class="transcript" id="transcript">Mikrofona basılı tut → değeri söyle → bırak</div>
+    <div class="mic-row">
+      <button class="mic-btn" id="micBtn">🎤</button>
+      <div class="hint">
+        <b>Basılı tut</b> → konuş → bırak → sonraki alana geçer<br>
         E/H alanlarında butona dokun • <b>"virgül"</b> → nokta
       </div>
     </div>
